@@ -1,23 +1,39 @@
-# Project Law (CaseMatch benzeri MVP)
+# UK case law semantic search (Find Case Law)
 
-İngiltere & Galler **Find Case Law** (National Archives) verisi üzerinde **anlamsal arama** yapan, isteğe bağlı **LLM özet** ve “neden benzer” metni üreten küçük bir yığın: **FastAPI** + **PostgreSQL + pgvector** + lokal **BGE (FastEmbed)** + OpenAI-uyumlu **OpenAI API / OpenRouter**.
+This project is a small **local research tool** for exploring **England & Wales** judgments published in **Find Case Law** (The National Archives). You describe a situation or legal question in plain language; the app finds **chapters of judgments** that are *semantically* close to your text, and optionally adds **short explanations** of why a case might be relevant.
 
-Bu yazılım **hukukî tavsiye değildir**. Tüm metinler kaynak hükimle birlikte doğrulanmalıdır.
+It is built for **exploration and triage**: pointing you toward possibly related decisions—not for replacing reading the full judgment, a qualified lawyer, or official research services.
 
-## Özellikler
+**This is not legal advice.** Always read the source judgment and verify citations and facts.
 
-- Atom feed’den dava listesi, `data.xml` ile hükmet metni çekme (ingestion CLI).
-- Metin parçalama, **384 boyut** embedding (`BAAI/bge-small-en-v1.5`), `case_chunks` tablosunda saklama.
-- `POST /v1/search` ile sorgu embedding’i + pgvector yakın komşu + (isteğe) LLM ile sıralama/özet.
-- Tek sayfa arayüz: `app/static/index.html`
+## What it does
 
-## Gereksinimler
+1. **Ingests** public metadata and judgment text from the official FCL **Atom** feed, stores cases and text chunks, and embeds them with a local **BGE** model (FastEmbed).
+2. **Searches** with your query: the query is embedded the same way, and **PostgreSQL + pgvector** returns the closest chunks, collapsed to one best chunk per case, then the top *N* cases.
+3. **Optionally** calls an **OpenAI-compatible** API (OpenAI, OpenRouter, etc.) to re-rank a small set of candidates, add **short summaries**, and **“why it might match”** text. You can turn the LLM off for faster, cheaper, embedding-only results.
 
-- **Python 3.11+** (3.13 ile test edildi; torch gerekmez).
-- **PostgreSQL 14+** ve **pgvector** eklentisi.
-- (İsteğe) **OpenAI** veya **OpenRouter** API anahtarı (özet/LLM adımı için).
+The stack: **FastAPI** · **PostgreSQL** · **pgvector** · local embeddings · optional LLM.
 
-## Kurulum
+## Why you might use it
+
+- You have a **factual or legal-question** phrasing and want a **first pass** at which published judgments may touch similar issues.
+- You are building a **pilot** or **integration** and need an API and database schema that start from FCL’s open data and vector search, without claiming completeness over all case law or any particular court coverage.
+
+**What it does *not* guarantee:** It only searches **ingested** cases, not the entire FCL database. Quality depends on your corpus size, chunking, and model choice. Ranks and LLM text can be wrong; treat them as **hints**.
+
+## Features
+
+- CLI ingestion from the FCL Atom feed, judgment XML fetch, chunking, embeddings, and storage.
+- `POST /v1/search` — semantic search with tunable candidate counts, optional LLM, and a “fast search (no LLM)” mode.
+- Simple web UI: `app/static/index.html`
+
+## Requirements
+
+- **Python 3.11+** (tested on 3.13; no PyTorch required for the default embedder path).
+- **PostgreSQL 14+** with the **pgvector** extension.
+- (Optional) **OpenAI** or **OpenRouter** (or any OpenAI-compatible) API key for the LLM step.
+
+## Setup
 
 ```bash
 cd project_law
@@ -26,84 +42,84 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Veritabanı migrasyonları
+## Database migrations
 
 ```bash
 psql -d project_law -f db/migrations/001_init.sql
 psql -d project_law -f db/migrations/002_ingestion_hybrid_embedding.sql
 ```
 
-`002` , `vector(384)` ve `ingestion_runs` / `search_events` tablolarını ekler. İlk kez `001` çalıştıysanız, `002` mevcut `case_chunks` tablosunu boyut uyuşması için yeniden oluşturur (dikkat: eski vektörler silinir).
+Migration `002` adds `vector(384)`-compatible storage and `ingestion_runs` / `search_events`. If you already applied `001`, `002` may rebuild `case_chunks` for dimension alignment (**existing vectors are dropped**—plan accordingly).
 
-## Ortam değişkenleri
+## Environment variables
 
-Kökte `.env` oluşturun (`.env.example` referans; `.env` asla commit etmeyin).
+Create `.env` in the project root (see `.env.example`; **never** commit real secrets).
 
-| Değişken | Açıklama |
-|----------|----------|
-| `DATABASE_URL` | Örn. `postgresql://KULLANICI@localhost:5432/project_law` |
-| `OPENAI_API_KEY` | OpenAI `sk-...` veya OpenRouter `sk-or-...` |
-| `LLM_SERVICE_URL` | OpenRouter: `https://openrouter.ai/api/v1` |
-| `LLM_MODEL` | Örn. `openai/gpt-4o-mini` |
-| `PORT` | Uvicorn portu (varsayılan 8000) |
-| `FCL_ATOM_BASE` | Find Case Law atom URL’si (varsayılan resmi) |
-| `FCL_REQUEST_SLEEP` | API nezaketi için istek arası gecikme (saniye) |
-| `SEARCH_CANDIDATE_K` / `SEARCH_FINAL_N` | Aday ve dönüş adedi |
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | e.g. `postgresql://USER@localhost:5432/project_law` |
+| `OPENAI_API_KEY` | OpenAI `sk-...` or OpenRouter `sk-or-...` |
+| `LLM_SERVICE_URL` | e.g. OpenRouter `https://openrouter.ai/api/v1` |
+| `LLM_MODEL` | e.g. `openai/gpt-4o-mini` |
+| `PORT` | Uvicorn port (default 8000) |
+| `FCL_ATOM_BASE` | FCL Atom URL (default is the official one) |
+| `FCL_REQUEST_SLEEP` | Delay between FCL requests (seconds), politeness |
+| `SEARCH_CANDIDATE_K` / `SEARCH_FINAL_N` | Retrieval and response sizes |
+| `SEARCH_LLM_MAX_CASES` / `SEARCH_LLM_EXCERPT_CHARS` / `SEARCH_LLM_TIMEOUT_SEC` / `SEARCH_LLM_MAX_OUTPUT_TOKENS` | Smaller = usually faster/cheaper LLM step |
 
-## Veri indirme (ingestion)
+## Ingesting data
 
 ```bash
 source .venv/bin/activate
 cd project_law
-# Örnek: 100 yeni, veritabanında olmayan dava; gerekirse 25 feed sayfasına kadar ilerle
+# Example: up to 100 new cases (not already in DB); scan up to 25 Atom pages if needed
 python -m app.cli ingest --limit 100 --pages 25
 ```
 
-- `--limit`: **sadece veritabanında olmayan** kaç dava eklensin (varsayılan: 30). Aynı `source_uri` mükerrer satır açmaz; zaten `cases` tablosundaki URI’lar atlanır, feed ileri sayfalara devam eder.
-- `--pages`: En fazla kaç Atom sayfası gezilecek; yeterli yeni dava toplanamadıysa değerini artır.
-- `--include-existing`: Normalde dışarıda. Verilirse, DB’de olsa bile feed’deki girdileri yeniden indirip metni/embed’i günceller.
-- [Find Case Law](https://caselaw.nationalarchives.gov.uk) her IP için dakikada istek sınırı uygulayabilir; toplu indekslemede lisans/izin açısından [permissions](https://caselaw.nationalarchives.gov.uk/permissions-and-licensing) sayfasını inceleyin.
+- `--limit`: number of **new** cases to add (default 30). Existing `source_uri` values are skipped; the feed may advance to later pages to fill the limit.
+- `--pages`: cap on how many Atom pages to walk.
+- `--include-existing`: re-fetch and update text/embeddings for items already in the database (use with care).
 
-## API ve arayüzü çalıştırma
+FCL may rate-limit by IP. For bulk or automated collection, read [permissions and licensing](https://caselaw.nationalarchives.gov.uk/permissions-and-licensing) and respect the service.
+
+## Run the API and UI
 
 ```bash
 source .venv/bin/activate
 cd project_law
 uvicorn app.main:app --host 127.0.0.1 --port 8000
-# veya (PORT ve .env ile):
+# or, using .env PORT:
 python -m app
 ```
 
-- Sağlık: `http://127.0.0.1:8000/health`
-- Arayüz: `http://127.0.0.1:8000/`
+- Health: `http://127.0.0.1:8000/health`
+- Web UI: `http://127.0.0.1:8000/`
 - OpenAPI: `http://127.0.0.1:8000/docs`
 
-### Örnek sorgu
+### Example search
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/v1/search \
   -H "Content-Type: application/json" \
-  -d '{"query":"unfair dismissal whistleblowing UK","final_n":5,"candidate_k":40}'
+  -d '{"query":"unfair dismissal whistleblowing UK","final_n":5,"candidate_k":40,"use_llm":true}'
 ```
 
-Yanıtta `used_llm: true` ise LLM adımı çalışmıştır. Anahtar yoksa sadece embedding + sabit açıklama metinleri döner.
+Set `"use_llm": false` for embedding-only results (faster, no API cost for the LLM). If `used_llm` is `false` in the response, either the LLM was off, a key was missing, or a timeout/fallback path ran.
 
-## Mimari özet
+## How it is structured
 
-1. Ingest: Atom → hükmet XML → düz metin → chunk → FastEmbed vektör → PostgreSQL.  
-2. Arama: sorgu embedding’i → pgvector ile aday parçalar → (isteğe) LLM ile özet/“neden benzer”.
+1. **Ingestion:** Atom → judgment XML → plain text → chunks → local embeddings (e.g. `BAAI/bge-small-en-v1.5`, 384 dims) → PostgreSQL.
+2. **Search:** query embedding → vector nearest neighbors → per-case best chunk → optional LLM on a small candidate list for wording and order.
 
-## Lisans (yazılım)
+## License (this codebase)
 
-Bu repodaki uygulama kodu proje tercihinize bırakılmıştır; hükmet metinleri **National Archives / Open Justice** koşullarına tabidir.
+The application code in this repository is for your own licensing choice. The **judgment text** and FCL data remain subject to **National Archives / open justice** terms; comply with FCL [terms of use](https://caselaw.nationalarchives.gov.uk/terminology/terms-of-use).
 
-## Sorun giderme
+## Troubleshooting
 
-- **`curl: (7) connection refused`**: Uvicorn çalışmıyor veya `PORT` yanlış.  
-- **“Set OPENAI_API_KEY...” / `used_llm: false`**: `.env`’de `OPENAI_API_KEY` (ve OpenRouter için `LLM_SERVICE_URL`) eksik; sunucuyu yeniden başlatın.  
-- **Embedding boyutu hatası**: `app/embedding_model.py` ile `db/migrations/002_*` içindeki `vector(384)` tutarlı olmalı.  
-- `get_settings` önbelleği: proses yeniden başlatılmadıkça eski env okunabilir.
+- **`Connection refused`:** server not running, or `PORT` mismatch.
+- **“Set OPENAI_API_KEY...” / `used_llm: false` with LLM on:** set `OPENAI_API_KEY` (and for OpenRouter, `LLM_SERVICE_URL`); restart the app.
+- **Vector dimension errors:** the embedding model in `app/embedding_model.py` must match `vector(384)` in the migrations.
+- **Settings cache:** the process may need a full restart to pick up new environment variables (see Pydantic `lru_cache` on settings).
 
----
-
-**Güvenlik:** API anahtarlarını repoya, sohbetlere veya ekran görüntülerine koymayın. OpenRouter/ OpenAI panellerinde düzenli key rotasyonu uygulayın.
+**Security:** Do not put API keys in the repo, chat logs, or screenshots. Rotate keys in your provider dashboard on a sensible schedule.
