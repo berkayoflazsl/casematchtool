@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Find similar cases (MVP)</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { font-family: system-ui, sans-serif; max-width: 860px; margin: 0 auto; padding: 1.5rem; color: #1a1a1a; }
+      h1 { font-size: 1.35rem; font-weight: 600; }
+      p.sub { color: #555; font-size: 0.9rem; margin-top: 0.25rem; }
+      label { display: block; font-weight: 500; margin-top: 1rem; }
+      textarea { width: 100%; min-height: 120px; padding: 0.6rem; font-size: 0.95rem; border: 1px solid #ccc; border-radius: 6px; }
+      button { margin-top: 0.6rem; padding: 0.5rem 1rem; background: #111; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+      button:disabled { opacity: 0.5; }
+      .card { border: 1px solid #e5e5e5; border-radius: 8px; padding: 1rem; margin-top: 0.75rem; background: #fafafa; }
+      .card h2 { font-size: 1rem; margin: 0 0 0.35rem; }
+      .meta { font-size: 0.8rem; color: #666; }
+      a.source { color: #0645ad; font-size: 0.9rem; }
+      .excerpt { font-size: 0.88rem; color: #444; margin-top: 0.5rem; }
+      .err { color: #b00; margin-top: 0.5rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Describe your situation (UK case law pilot)</h1>
+    <p class="sub">Uses local embeddings (BGE) on ingested National Archives data + optional OpenAI for summaries. Not legal advice. Always read the source judgment.</p>
+    <label for="q">Query</label>
+    <textarea id="q" placeholder="e.g. Unfair dismissal after whistleblowing in a public sector job…"></textarea>
+    <label style="font-weight:400;margin-top:0.75rem;">
+      <input type="checkbox" id="fast" />
+      Fast search (no LLM) — only embeddings; much quicker
+    </label>
+    <button type="button" id="go">Search</button>
+    <p id="status" class="sub"></p>
+    <div id="out"></div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      $("go").onclick = async () => {
+        const query = $("q").value.trim();
+        if (query.length < 3) return;
+        $("out").textContent = "";
+        $("go").disabled = true;
+        $("status").textContent = "Searching…";
+        try {
+          const r = await fetch("/v1/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query,
+              final_n: 8,
+              candidate_k: 40,
+              use_llm: !$("fast").checked,
+            }),
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          if (!data.used_llm && $("fast").checked) {
+            $("status").textContent = "Fast: embeddings only (LLM disabled).";
+          } else {
+            $("status").textContent = data.used_llm
+              ? "LLM summaries on."
+              : "Embeddings only (set OPENAI_API_KEY for LLM, or uncheck “Fast search”).";
+          }
+          const frag = document.createDocumentFragment();
+          (data.results || []).forEach((h) => {
+            const d = document.createElement("div");
+            d.className = "card";
+            const t = h.title || h.source_uri;
+            d.innerHTML =
+              "<h2>" + escapeHtml(t) + "</h2>" +
+              "<div class=\"meta\">" +
+              (h.neutral_citation || "") +
+              (h.court ? " · " + escapeHtml(h.court) : "") +
+              (h.decision_date ? " · " + escapeHtml(h.decision_date) : "") +
+              " · similarity: " + Number(h.similarity).toFixed(1) +
+              (h.outcome_label ? " · " + escapeHtml(h.outcome_label) : "") +
+              "</div>" +
+              (h.public_url ? "<div><a class=\"source\" target=\"_blank\" rel=\"noopener\" href=\"" + escAttr(h.public_url) + "\">View on Find Case Law</a></div>" : "") +
+              "<p class=\"excerpt\">" + escapeHtml(h.why_similar || "") + "</p>" +
+              "<p class=\"excerpt\">" + escapeHtml(h.short_summary || "") + "</p>" +
+              (h.chunk_excerpt ? "<p class=\"excerpt\"><em>Chunk:</em> " + escapeHtml(h.chunk_excerpt) + "</p>" : "");
+            frag.appendChild(d);
+          });
+          $("out").appendChild(frag);
+        } catch (e) {
+          $("status").textContent = "";
+          $("out").innerHTML = "<p class=\"err\">" + escapeHtml(String(e)) + "</p>";
+        } finally {
+          $("go").disabled = false;
+        }
+      };
+      function escapeHtml(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      }
+      function escAttr(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+      }
+    </script>
+  </body>
+</html>
